@@ -1,0 +1,33 @@
+{
+  "name": "gridfw-compiler",
+  "version": "2.0.0",
+  "description": "Compiler for Gridfw",
+  "main": "dist/index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rafikalid/gridfw-compiler.git"
+  },
+  "keywords": [
+    "Compiler",
+    "Gridfw"
+  ],
+  "author": "khalid RAFIK",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/rafikalid/gridfw-compiler/issues"
+  },
+  "homepage": "https://github.com/rafikalid/gridfw-compiler#readme",
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "through2": "^4.0.2",
+    "typescript": "^4.3.5"
+  },
+  "devDependencies": {
+    "@types/through2": "^2.0.36",
+    "@types/vinyl": "^2.0.5",
+    "vinyl": "^2.2.1"
+  }
+}
