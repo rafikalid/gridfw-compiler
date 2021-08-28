@@ -3,6 +3,7 @@ import {readFileSync} from 'fs';
 import VinylFile from 'vinyl';
 import { info } from "../utils/logs";
 import { compileControllers } from "./compile-controllers";
+import {normalize} from 'path';
 // const GRIDFW_PACKAGE_NAME= 'gridfw';
 
 
@@ -14,30 +15,35 @@ export function compile(
 	files: Map<string, VinylFile>,
 	compilerOptions: ts.CompilerOptions,
 	pretty:boolean
-): VinylFile[]{
+): Map<string, VinylFile>{
 	//* Create Program Host
 	const pHost= ts.createCompilerHost(compilerOptions, true);
 	pHost.readFile= function(fileName: string){
-		var f= files.get(fileName);
+		var f= files.get(normalize(fileName));
 		if(f!=null && f.isBuffer()) return f.contents.toString('utf-8');
-		else {
-			info(`Load file from disk>> ${fileName}`);
-			return readFileSync(fileName, 'utf-8');
-		}
+		else return readFileSync(fileName, 'utf-8');
 	};
 	//* Create Program
 	const filePaths= Array.from(files.keys());
 	const program= ts.createProgram(filePaths, compilerOptions, pHost);
-	//* Source files
+	//* Prepare modif map
+	const filesMap:Map<string, ts.SourceFile>= new Map();
 	for(let i=0, len= filePaths.length; i<len; ++i){
 		let filePath= filePaths[i];
-		let sourceFile= program.getSourceFile(filePath)!;
-		//* Compile controllers
-		sourceFile= compileControllers(program, sourceFile, files);
-		//* Update file's data
-		files.get(filePath)!.contents= Buffer.from(ts.createPrinter().printFile(sourceFile));
+		filesMap.set(filePath, program.getSourceFile(filePath)!);
 	}
+	//* Source files
+	for(let i=0, len= filePaths.length; i<len; ++i){
+		//* Compile controllers
+		compileControllers(program, filePaths[i], filesMap);
+	}
+	//* Save data
+	info('>> Printing result...')
+	filesMap.forEach(function(srcFile, filePath){
+		files.get(filePath)!.contents= Buffer.from(ts.createPrinter().printFile(srcFile));
+	});
+	info('>> Done.')
 	//* Return
-	return Array.from(files.values());
+	return files;
 }
 

@@ -5,13 +5,8 @@ import {readFileSync} from 'fs';
 import ts from "typescript";
 import type {Transform} from 'stream';
 
-/** Gulp options */
-export interface GulpOptions{
-	tsConfig: string|ts.CompilerOptions
-	pretty:boolean
-}
 /** Adapter for gulp */
-export function createGulpPipe({tsConfig, pretty=true}:GulpOptions){
+export function createGulpPipe(tsConfig: string|ts.CompilerOptions, pretty=true){
 	const files: Map<string, Vinyl>= new Map();
 	if(typeof tsConfig==='string') tsConfig= parseTsConfig(tsConfig);
 	function collect(file: Vinyl, _:any, cb: Through.TransformCallback){
@@ -19,7 +14,8 @@ export function createGulpPipe({tsConfig, pretty=true}:GulpOptions){
 		cb();
 	}
 	function exec(this: Transform, cb: () => void){
-		var resp= compileTypescript(files, tsConfig as ts.CompilerOptions, pretty);
+		var cpFiles= compileTypescript(files, tsConfig as ts.CompilerOptions, pretty)
+		var resp= Array.from( cpFiles.values() );
 		for(let i=0, len= resp.length; i<len; ++i)
 			this.push(resp[i]);
 		cb();

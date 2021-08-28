@@ -8,3 +8,8 @@ export function info(...data:any[]){
 	var o= Chalk.bold.blue;
 	console.warn(...data.map(t=> typeof t==='string' ? o(t): t));
 }
+
+/**  */
+export function debug(...data: any[]){
+	console.log(...data);
+}
