@@ -35,7 +35,7 @@ export function compile(
 	//* Source files
 	for(let i=0, len= filePaths.length; i<len; ++i){
 		//* Compile controllers
-		compileControllers(program, filePaths[i], filesMap);
+		compileControllers(program, filePaths[i], filesMap, pretty);
 	}
 	//* Save data
 	info('>> Printing result...')
