@@ -1,13 +1,13 @@
 import { _errorFile } from "@src/utils/errors";
 import { debug, info } from "@src/utils/logs";
-import ts, { flattenDiagnosticMessageText } from "typescript";
-import type Vinyl from 'vinyl';
+import ts from "typescript";
 import { join, relative, dirname, normalize } from 'path';
 import Glob from 'glob';
 
 /** Compile controllers */
 export function compileControllers(program: ts.Program, filePath: string, filesMap: Map<string, ts.SourceFile>, pretty: boolean): void {
-	var srcFile= filesMap.get(filePath)!;
+	var srcFile= program.getSourceFile(filePath)!;
+	// var srcFile= filesMap.get(filePath)!;
 	const typeChecker= program.getTypeChecker();
 	//* Check if file has a target pattern
 	var patterns= _getPattern(srcFile, typeChecker);
@@ -48,6 +48,8 @@ interface ParsedMethod{
 		cName:	string
 		/** Method's name */
 		name:	string
+		/** Is static method */
+		isStatic: boolean
 	}
 }
 
@@ -77,7 +79,7 @@ function _getPattern(sourceFile: ts.SourceFile, typeChecker: ts.TypeChecker) {
 					throw new Error(`Expected static string as argument of Gridfw::scan. got "${node.getText()}" at ${_errorFile(sourceFile, node)}`);
 				patterns.add(node.arguments[0].getText());
 			}
-		} else if(node.getChildCount()>0){
+		} else {
 			queue.push(...node.getChildren());
 		}
 	}
@@ -140,7 +142,6 @@ function parseTs(program: ts.Program, ctx:ts.TransformationContext, srcFile: ts.
 					let symbName:string;
 					if(
 						ts.isCallExpression(deco)
-						&& deco.arguments.length===1
 						&& (decoType= typeChecker.getTypeAtLocation(deco.expression))
 						&& (
 							(symbName= decoType.symbol.name)==='route'
@@ -190,7 +191,8 @@ function parseTs(program: ts.Program, ctx:ts.TransformationContext, srcFile: ts.
 									controller: {
 										file:	srcFile.fileName,
 										cName:	(mNode.parent as ts.ClassDeclaration).name!.getText(),
-										name:	mNode.name.getText()
+										name:	mNode.name.getText(),
+										isStatic: mNode.modifiers?.some(n=> n.kind===ts.SyntaxKind.StaticKeyword) ?? false
 									}
 								});
 								break;
@@ -271,7 +273,15 @@ function _injectData(program: ts.Program, srcFile: ts.SourceFile, results: Map<s
 			);
 		});
 		statements.push(...srcFile.statements);
-		srcFile= ts.factory.createSourceFile(statements, srcFile.endOfFileToken, srcFile.flags);
+		srcFile= f.updateSourceFile(
+			srcFile,
+			statements,
+			false,
+			srcFile.referencedFiles,
+			srcFile.typeReferenceDirectives,
+			srcFile.hasNoDefaultLib,
+			srcFile.libReferenceDirectives
+		);
 	}
 	return srcFile;
 }
@@ -313,7 +323,7 @@ function _injectdataVisitor(
 					undefined, []
 				)
 			}
-		} else if(node.getChildCount()>0){
+		} else {
 			node= ts.visitEachChild(node, _visitor, ctx);
 		}
 		return node;
@@ -328,15 +338,17 @@ function _injectdataVisitor(
 			let rt: ts.Identifier
 			if(item.baseRoutes.length){
 				rt= f.createUniqueName('route');
-				block.push(f.createExpressionStatement(f.createCallExpression(
-					f.createPropertyAccessExpression(varName, rt),
-					undefined, item.baseRoutes.map(e=> f.createIdentifier(e))
-				)));
+				block.push(f.createVariableStatement(undefined, [
+					f.createVariableDeclaration(rt, undefined, undefined, f.createCallExpression(
+						f.createPropertyAccessExpression(varName, 'route'),
+						undefined, item.baseRoutes.map(e=> f.createIdentifier(e))
+					))
+				]));
 			} else {
 				rt= varName;
 			}
 			// Add and Compile methods
-			for(let j=1, methods= item.methods, jlen= methods.length; j<jlen; ++i){
+			for(let j=0, methods= item.methods, jlen= methods.length; j<jlen; ++j){
 				let m= methods[j];
 				// Generate class import
 				let c= m.controller;
@@ -344,7 +356,7 @@ function _injectdataVisitor(
 				let classVar: ts.Identifier|undefined;
 				if(clMap==null){
 					clMap= new Map();
-					imports.set(c.file, new Map());
+					imports.set(c.file, clMap);
 					classVar= f.createUniqueName(c.cName);
 					clMap.set(c.cName, classVar);
 				} else {
@@ -355,26 +367,31 @@ function _injectdataVisitor(
 					}
 				}
 				// Generate method
+				let methodArgs: ts.Expression[];
 				if(m.method==='method'){
 					let targetMethod= m.routes[0] as string;
-					let routes= m.routes.slice(1).map(e=> f.createIdentifier(e))
-					block.push(f.createExpressionStatement(f.createCallExpression(
-						f.createPropertyAccessExpression(rt, m.method ),
-						undefined, [
-							f.createIdentifier(targetMethod),
-							f.createArrayLiteralExpression(routes, pretty),
-							f.createPropertyAccessExpression(classVar, c.name)
-						]
-					)));
+					let routes= m.routes.slice(1).map(e=> f.createIdentifier(e));
+					methodArgs= [
+						f.createIdentifier(targetMethod),
+					];
+					if(routes.length>0) methodArgs.push(f.createArrayLiteralExpression(routes, pretty))
+				} else if(m.routes.length > 0) {
+					methodArgs= [
+						f.createArrayLiteralExpression(m.routes.map(e=> f.createIdentifier(e)), pretty),
+					];
 				} else {
-					block.push(f.createExpressionStatement(f.createCallExpression(
-						f.createPropertyAccessExpression(rt, m.method ),
-						undefined, [
-							f.createArrayLiteralExpression(m.routes.map(e=> f.createIdentifier(e)), pretty),
-							f.createPropertyAccessExpression(classVar, c.name)
-						]
-					)));
+					methodArgs= [];
 				}
+				// Add method declaration
+				methodArgs.push(f.createPropertyAccessExpression(
+					classVar,
+					f.createIdentifier(c.isStatic===true ? c.name : `prototype.${c.name}`)
+				));
+				// push method block
+				block.push(f.createExpressionStatement(f.createCallExpression(
+					f.createPropertyAccessExpression(rt, m.method ),
+					undefined, methodArgs
+				)));
 			}
 		}
 		return block;
