@@ -341,7 +341,7 @@ function _injectdataVisitor(
 				block.push(f.createVariableStatement(undefined, [
 					f.createVariableDeclaration(rt, undefined, undefined, f.createCallExpression(
 						f.createPropertyAccessExpression(varName, 'route'),
-						undefined, item.baseRoutes.map(e=> f.createIdentifier(e))
+						undefined, [f.createArrayLiteralExpression(item.baseRoutes.map(e=> f.createIdentifier(e)), pretty)]
 					))
 				]));
 			} else {
