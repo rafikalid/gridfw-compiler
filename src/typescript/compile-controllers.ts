@@ -1,8 +1,11 @@
 import { _errorFile } from "@src/utils/errors";
 import { debug, info } from "@src/utils/logs";
-import ts from "typescript";
+import ts, { createIdentifier } from "typescript";
 import { join, relative, dirname, normalize } from 'path';
 import Glob from 'glob';
+import { _importName } from "@src/utils/get-import";
+import Pug from 'pug';
+import { findChildByKind } from "@src/utils/typescript-utils";
 
 /** Compile controllers */
 export function compileControllers(program: ts.Program, filePath: string, filesMap: Map<string, ts.SourceFile>, pretty: boolean): void {
@@ -13,7 +16,7 @@ export function compileControllers(program: ts.Program, filePath: string, filesM
 	var patterns= _getPattern(srcFile, typeChecker);
 	if(patterns.size===0) return;
 	//* Router: GET /route controller
-	const results: Map<string, ParserResponse[]>= new Map();
+	const results: Map<string, ParserResponse>= new Map();
 	//* Parse found patterns
 	const relativeDirname= relative(process.cwd(), dirname(srcFile.fileName));
 	patterns.forEach(function(pattern){
@@ -32,8 +35,19 @@ export function compileControllers(program: ts.Program, filePath: string, filesM
 	filesMap.set(filePath, srcFile);
 }
 
+
 /** Parser response */
 interface ParserResponse{
+	/** Controllers */
+	controllers: ParsedController[]
+	/** i18n */
+	i18n: {
+		filename:	string
+		varname:	string
+	}[]
+}
+/** Controllers interface */
+interface ParsedController{
 	baseRoutes: string[],
 	methods: ParsedMethod[]
 }
@@ -105,18 +119,37 @@ function _glob(pattern: string, relativeDirname: string): string[]{
 }
 
 /** Parse paths for controllers */
-function _parseFiles(globPaths: string[], filesMap: Map<string, ts.SourceFile>, program: ts.Program): ParserResponse[]{
-	var results: ParserResponse[]= [];
+function _parseFiles(globPaths: string[], filesMap: Map<string, ts.SourceFile>, program: ts.Program): ParserResponse{
+	var results: ParserResponse= {
+		controllers: [],
+		i18n: []
+	};
+	const compilerOptions= program.getCompilerOptions();
 	for(let i=0, len= globPaths.length; i<len; ++i){
 		//* Load file
 		let filePath= globPaths[i];
 		let srcFile= filesMap.get(filePath)!;
 		if(srcFile==null)
 			throw new Error(`Missing file from compilation pipline: ${filePath}`);
+		//* If file needs imports (like pug runtime lib)
+		const addedImports: ts.Statement[]= [];
 		//* Parse
 		srcFile= ts.transform(srcFile, [function(ctx:ts.TransformationContext): ts.Transformer<ts.Node>{
-			return parseTs(program, ctx, srcFile, results);
-		}], program.getCompilerOptions()).transformed[0] as ts.SourceFile;
+			return parseTs(program, ctx, srcFile, results, addedImports, compilerOptions);
+		}], compilerOptions).transformed[0] as ts.SourceFile;
+		//* Add imports
+		if(addedImports.length>0){
+			let f= ts.factory;
+			srcFile= f.updateSourceFile(
+				srcFile,
+				addedImports.concat(srcFile.statements),
+				false,
+				srcFile.referencedFiles,
+				srcFile.typeReferenceDirectives,
+				srcFile.hasNoDefaultLib,
+				srcFile.libReferenceDirectives
+			);
+		}
 		//* Save file
 		filesMap.set(filePath, srcFile);
 	}
@@ -124,13 +157,27 @@ function _parseFiles(globPaths: string[], filesMap: Map<string, ts.SourceFile>, 
 }
 
 /** Parse and compile each file */
-function parseTs(program: ts.Program, ctx:ts.TransformationContext, srcFile: ts.SourceFile, results: ParserResponse[]): ts.Transformer<ts.Node>{
+function parseTs(
+	program: ts.Program,
+	ctx:ts.TransformationContext,
+	srcFile: ts.SourceFile,
+	results: ParserResponse,
+	addedImports: ts.Statement[],
+	compilerOptions: ts.CompilerOptions
+): ts.Transformer<ts.Node>{
 	const typeChecker= program.getTypeChecker();
 	const f= ctx.factory;
-	var resultItem: ParserResponse;
+	var resultItem: ParsedController;
+	let controllersArr= results.controllers;
+	var i18nArr= results.i18n;
+	/** Pug import var */
+	var pugImportVar: ts.Identifier|undefined= undefined;
+	/** Printer, used to print pug function */
+	var tsPrinter= ts.createPrinter();
 	return _visitor;
 	function _visitor(node:ts.Node): ts.Node{
 		switch(node.kind){
+			//* Controllers
 			case ts.SyntaxKind.ClassDeclaration:
 				let cNode= node as ts.ClassDeclaration;
 				// Check for wrapper "route"
@@ -153,7 +200,7 @@ function parseTs(program: ts.Program, ctx:ts.TransformationContext, srcFile: ts.
 							baseRoutes: _argExtractString(deco.arguments, symbName, srcFile, node),
 							methods: []
 						};
-						results.push(resultItem);
+						controllersArr.push(resultItem);
 						// Remove "route" decodator
 						node= f.createClassDeclaration(
 							classDecorators.filter((_, idx)=> idx!==i),
@@ -217,6 +264,36 @@ function parseTs(program: ts.Program, ctx:ts.TransformationContext, srcFile: ts.
 					);
 				}
 				break;
+			//* I18N
+			case ts.SyntaxKind.VariableStatement:
+				for(
+					let i=0,
+					hasExport= node.modifiers?.some(e=> e.kind===ts.SyntaxKind.ExportKeyword) ?? false,
+					varDeclarations= (node as ts.VariableStatement).declarationList.declarations,
+					len= varDeclarations.length;
+					i<len; ++i
+				){
+					let declaration= varDeclarations[i];
+					let type= declaration.type;
+					let s: ts.Symbol | undefined;
+					if(
+						type
+						&& ts.isTypeReferenceNode(type)
+						&& (s= typeChecker.getSymbolAtLocation(type.typeName))
+						&& s.name==='I18N'
+					){
+						let varname= declaration.name.getText();
+						if(hasExport===false) throw new Error(`Expected "export" keyword on i18n variable "${varname}" at ${_errorFile(srcFile, node)}`);
+						i18nArr.push({
+							filename:	srcFile.fileName,
+							varname:	varname
+						});
+						// Parse fields
+						node= _compileI18nObject(node, varname);
+					}
+				}
+				break;
+			//* Go through childs
 			case ts.SyntaxKind.SyntaxList:
 			case ts.SyntaxKind.SourceFile:
 				node= ts.visitEachChild(node, _visitor, ctx);
@@ -224,7 +301,85 @@ function parseTs(program: ts.Program, ctx:ts.TransformationContext, srcFile: ts.
 		}
 		return node;
 	}
+	/** Compile i18n object */
+	function _compileI18nObject(node: ts.Node, i18nVarname: string){
+		return ts.visitEachChild(node, _visitor, ctx);
+		/** Visitor */
+		function _visitor(node: ts.Node) :ts.Node{
+			if(ts.isCallExpression(node)){
+				let info= _importName(node.expression, typeChecker);
+				if(info!=null && info.isGridfw && info.name==='i18nPug'){
+					let arg= node.arguments[0];
+					if(!ts.isStringLiteral(arg))
+						throw new Error(`Expected static string as argument for "${node.expression.getText()}" at ${_errorFile(srcFile, node)}`);
+					return _compilePug(arg.getText().slice(1, -1), i18nVarname) ?? node;
+				}
+			} else if(ts.isTaggedTemplateExpression(node)){
+				let info= _importName(node.tag, typeChecker);
+				if(info!=null && info.isGridfw && info.name==='i18nPug'){
+					let arg= node.template;
+					if(!ts.isNoSubstitutionTemplateLiteral(arg))
+						throw new Error(`Expected static string (No Substitution Template Literal) as argument for "${node.tag.getText()}" at ${_errorFile(srcFile, node)}`);
+					return _compilePug(arg.getText().slice(1, -1), i18nVarname) ?? node;
+				}
+			}
+			return ts.visitEachChild(node, _visitor, ctx);
+		}
+	}
+	/** Compile pug into function */
+	function _compilePug(str: string, i18nVarname: string): ts.Node|undefined {
+		// Check for pugImportVar
+		if(pugImportVar==null){
+			pugImportVar= f.createUniqueName('pug');
+			addedImports.push(
+				f.createImportDeclaration(undefined, undefined, f.createImportClause(
+					false, undefined, 
+					f.createNamedImports([
+						f.createImportSpecifier(f.createIdentifier('pug'), pugImportVar)
+					])
+				), f.createStringLiteral('pug-runtime'))
+			);
+		}
+		// Compile Pug
+		str= '|'+str.split(/\n/).join("\n|");
+		str= Pug.compileClient(str, {
+			name: ' ',
+			inlineRuntimeFunctions: false,
+			globals: [i18nVarname]
+		});
+		var nd= ts.createSourceFile('any', str, ts.ScriptTarget.ESNext, true, ts.ScriptKind.JS);
+		var fxNode= findChildByKind(nd, ts.SyntaxKind.FunctionDeclaration);
+		if(fxNode==null) return;
+		// Replace "pug" runtime var
+		fxNode= ts.transform(fxNode, [function(ctx:ts.TransformationContext): ts.Transformer<ts.Node>{
+			return _visitor;
+			function _visitor(n: ts.Node): ts.Node{
+				if(
+					ts.isPropertyAccessExpression(n)
+					&& n.expression.getText()==='pug'
+				){
+					return f.createPropertyAccessExpression(pugImportVar!, n.name);
+				} else if(ts.isParameter(n)){
+					return f.createParameterDeclaration(
+						n.decorators, n.modifiers, n.dotDotDotToken, n.name, n.questionToken,
+						n.type ?? f.createKeywordTypeNode(ts.SyntaxKind.AnyKeyword),
+						n.initializer
+					)
+				} else if(ts.isVariableDeclaration(n)){
+					return f.createVariableDeclaration(
+						n.name, n.exclamationToken,
+						n.type ?? f.createKeywordTypeNode(ts.SyntaxKind.AnyKeyword),
+						n.initializer
+					);
+				}
+				return ts.visitEachChild(n, _visitor, ctx);
+			}
+		}], compilerOptions).transformed[0];
+		// print & return
+		return f.createIdentifier(tsPrinter.printNode(ts.EmitHint.Unspecified, fxNode, nd));
+	}
 }
+
 
 /** Check argument is string or array of string & extract theme */
 function _argExtractString(args: ts.NodeArray<ts.Expression>, decoName: string, srcFile: ts.SourceFile, node: ts.Node): string[]{
@@ -244,7 +399,7 @@ function _argExtractString(args: ts.NodeArray<ts.Expression>, decoName: string, 
 	return result;
 }
 
-function _injectData(program: ts.Program, srcFile: ts.SourceFile, results: Map<string, ParserResponse[]>, pretty: boolean): ts.SourceFile {
+function _injectData(program: ts.Program, srcFile: ts.SourceFile, results: Map<string, ParserResponse>, pretty: boolean): ts.SourceFile {
 	/** Import import methods from files */
 	var imports: Map<string, Map<string, ts.Identifier>>= new Map();
 	// Inject data
@@ -292,7 +447,7 @@ function _injectdataVisitor(
 	program: ts.Program,
 	ctx: ts.TransformationContext,
 	srcFile: ts.SourceFile,
-	results: Map<string, ParserResponse[]>,
+	results: Map<string, ParserResponse>,
 	/** Collect import statements */
 	imports: Map<string, Map<string, ts.Identifier>>,
 	pretty: boolean
@@ -329,10 +484,11 @@ function _injectdataVisitor(
 		return node;
 	}
 	/** Compile data */
-	function _compileResults(r: ParserResponse[], varName: ts.Identifier): ts.Statement[]{
+	function _compileResults(r: ParserResponse, varName: ts.Identifier): ts.Statement[]{
 		var block: ts.Statement[]= [];
-		for(let i=0, len= r.length; i<len; ++i){
-			let item= r[i];
+		//* Controllers
+		for(let i=0, controllers= r.controllers, len= controllers.length; i<len; ++i){
+			let item= controllers[i];
 			if(item.methods.length===0) continue;
 			// Create route
 			let rt: ts.Identifier
@@ -394,6 +550,33 @@ function _injectdataVisitor(
 				)));
 			}
 		}
+		//* I18N
+		let i18nVars: ts.Identifier[]= [];
+		for(let i=0, i18nArr= r.i18n, len=i18nArr.length; i<len; ++i){
+			let i18n= i18nArr[i];
+			//* Generate class import
+			let clMap= imports.get(i18n.filename);
+			let i18nVar: ts.Identifier|undefined;
+			if(clMap==null){
+				clMap= new Map();
+				imports.set(i18n.filename, clMap);
+				i18nVar= f.createUniqueName(i18n.varname);
+				clMap.set(i18n.varname, i18nVar);
+			} else {
+				i18nVar= clMap.get(i18n.varname);
+				if(i18nVar==null){
+					i18nVar= f.createUniqueName(i18n.varname);
+					clMap.set(i18n.varname, i18nVar);
+				}
+			}
+			//* Add
+			i18nVars.push(i18nVar);
+		}
+		if(i18nVars.length)
+			block.push(f.createExpressionStatement(f.createCallExpression(
+				f.createPropertyAccessExpression( varName, f.createIdentifier("_initI18n")),
+				undefined, i18nVars
+			)));
 		return block;
 	}
 }
@@ -406,3 +589,4 @@ function _relative(from: string, to: string){
 	if(c!=='.' && c!=='/') p= './'+p;
 	return p;
 }
+
