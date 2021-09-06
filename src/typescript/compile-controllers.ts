@@ -242,6 +242,12 @@ function parseTs(
 										isStatic: mNode.modifiers?.some(n=> n.kind===ts.SyntaxKind.StaticKeyword) ?? false
 									}
 								});
+								// Params
+								console.log('-------- ', symbName ,';', mNode.name.getText())
+								mNode.parameters.forEach((v, i)=>{
+									console.log('==', v.name.getText(), '::', v.type?.getText(), typeChecker.getTypeAtLocation(v.type!)?.symbol?.declarations?.[0].getText())
+
+								})
 								break;
 						}
 					}
@@ -266,31 +272,31 @@ function parseTs(
 				break;
 			//* I18N
 			case ts.SyntaxKind.VariableStatement:
-				for(
-					let i=0,
-					hasExport= node.modifiers?.some(e=> e.kind===ts.SyntaxKind.ExportKeyword) ?? false,
-					varDeclarations= (node as ts.VariableStatement).declarationList.declarations,
-					len= varDeclarations.length;
-					i<len; ++i
-				){
-					let declaration= varDeclarations[i];
-					let type= declaration.type;
-					let s: ts.Symbol | undefined;
-					if(
-						type
-						&& ts.isTypeReferenceNode(type)
-						&& (s= typeChecker.getSymbolAtLocation(type.typeName))
-						&& s.name==='I18N'
+				if( ts.getJSDocTags(node).some(t=> t.tagName.getText()==='i18n') ){
+					let varStatementNode= node as ts.VariableStatement;
+					if(!varStatementNode.modifiers?.some(e=> e.kind===ts.SyntaxKind.ExportKeyword))
+						throw new Error(`Expected "export" keyword on i18n variable at ${_errorFile(srcFile, varStatementNode)}`);
+					let resultDeclarations= [];
+					for(
+						let i=0,
+						varDeclarations= varStatementNode.declarationList.declarations,
+						len= varDeclarations.length;
+						i<len; ++i
 					){
+						let declaration= varDeclarations[i];
 						let varname= declaration.name.getText();
-						if(hasExport===false) throw new Error(`Expected "export" keyword on i18n variable "${varname}" at ${_errorFile(srcFile, node)}`);
 						i18nArr.push({
 							filename:	srcFile.fileName,
 							varname:	varname
 						});
 						// Parse fields
-						node= _compileI18nObject(node, varname);
+						declaration= _compileI18nObject(declaration, varname);
+						resultDeclarations.push(declaration);
 					}
+					if(resultDeclarations.length)
+						node= f.updateVariableStatement(varStatementNode, varStatementNode.modifiers,
+							f.updateVariableDeclarationList( varStatementNode.declarationList, resultDeclarations )
+						);
 				}
 				break;
 			//* Go through childs
@@ -302,7 +308,7 @@ function parseTs(
 		return node;
 	}
 	/** Compile i18n object */
-	function _compileI18nObject(node: ts.Node, i18nVarname: string){
+	function _compileI18nObject(node: ts.VariableDeclaration, i18nVarname: string){
 		return ts.visitEachChild(node, _visitor, ctx);
 		/** Visitor */
 		function _visitor(node: ts.Node) :ts.Node{
