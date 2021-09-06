@@ -87,7 +87,7 @@ function _getPattern(sourceFile: ts.SourceFile, typeChecker: ts.TypeChecker) {
 				ts.isPropertyAccessExpression(node.expression)
 				&& node.arguments?.length===1
 				&& node.expression.name.getText()==='scan'
-				&& typeChecker.getTypeAtLocation(node.expression.getFirstToken()!).symbol.name === 'Gridfw'
+				&& typeChecker.getTypeAtLocation(node.expression.expression).symbol?.name === 'Gridfw'
 			){
 				if(node.arguments[0].kind!==ts.SyntaxKind.StringLiteral)
 					throw new Error(`Expected static string as argument of Gridfw::scan. got "${node.getText()}" at ${_errorFile(sourceFile, node)}`);
@@ -332,11 +332,11 @@ function parseTs(
 		if(pugImportVar==null){
 			pugImportVar= f.createUniqueName('pug');
 			addedImports.push(
+				f.createExpressionStatement(
+					f.createIdentifier('// @ts-ignore')
+				),
 				f.createImportDeclaration(undefined, undefined, f.createImportClause(
-					false, undefined, 
-					f.createNamedImports([
-						f.createImportSpecifier(f.createIdentifier('pug'), pugImportVar)
-					])
+					false, pugImportVar, undefined
 				), f.createStringLiteral('pug-runtime'))
 			);
 		}
@@ -345,7 +345,9 @@ function parseTs(
 		str= Pug.compileClient(str, {
 			name: ' ',
 			inlineRuntimeFunctions: false,
-			globals: [i18nVarname]
+			globals: [i18nVarname],
+			compileDebug: false,
+			debug: false
 		});
 		var nd= ts.createSourceFile('any', str, ts.ScriptTarget.ESNext, true, ts.ScriptKind.JS);
 		var fxNode= findChildByKind(nd, ts.SyntaxKind.FunctionDeclaration);
@@ -371,6 +373,21 @@ function parseTs(
 						n.type ?? f.createKeywordTypeNode(ts.SyntaxKind.AnyKeyword),
 						n.initializer
 					);
+				} else if(ts.isCallExpression(n)){
+					let exp= n.expression;
+					if(
+						ts.isPropertyAccessExpression(exp)
+						&& exp.name.getText() === 'call'
+					){
+						let args: ts.Expression[]= [f.createThis()];
+						for( let i=0, pr= (exp.expression as ts.FunctionExpression).parameters, len= pr.length; i<len; ++i ){
+							args.push( f.createPropertyAccessExpression(f.createIdentifier('locals'), pr[i].name.getText()) );
+						}
+						let n2= ts.visitEachChild(n, _visitor, ctx) as ts.CallExpression;
+						return f.updateCallExpression(
+							n2, n2.expression, undefined, args
+						);
+					}
 				}
 				return ts.visitEachChild(n, _visitor, ctx);
 			}
