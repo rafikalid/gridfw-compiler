@@ -1,9 +1,9 @@
 import { _errorFile } from "@src/utils/errors";
 import { debug, info } from "@src/utils/logs";
-import ts, { createIdentifier } from "typescript";
+import ts from "typescript";
 import { join, relative, dirname, normalize } from 'path';
 import Glob from 'glob';
-import { _importName } from "@src/utils/get-import";
+import { ImportName, _importName } from "@src/utils/get-import";
 import Pug from 'pug';
 import { findChildByKind } from "@src/utils/typescript-utils";
 
@@ -53,18 +53,21 @@ interface ParsedController{
 }
 /** Parsed methods */
 interface ParsedMethod{
-	method: string,
+	method:	string,
 	routes:	string[],
-	controller:	{
-		/** File path */
-		file: string
-		/** Controller's name */
-		cName:	string
-		/** Method's name */
-		name:	string
-		/** Is static method */
-		isStatic: boolean
-	}
+	controller:	CntrlDesc
+}
+interface CntrlDesc{
+	/** File path */
+	file: string
+	/** Controller's name */
+	cName:	string
+	/** Method's name */
+	name:	string
+	/** Is static method */
+	isStatic: boolean,
+	/** Params */
+	params:	ImportName[]
 }
 
 /** Files compilation result */
@@ -239,15 +242,17 @@ function parseTs(
 										file:	srcFile.fileName,
 										cName:	(mNode.parent as ts.ClassDeclaration).name!.getText(),
 										name:	mNode.name.getText(),
-										isStatic: mNode.modifiers?.some(n=> n.kind===ts.SyntaxKind.StaticKeyword) ?? false
+										isStatic: mNode.modifiers?.some(n=> n.kind===ts.SyntaxKind.StaticKeyword) ?? false,
+										params: mNode.parameters.map(function(v){
+											var gtype: ImportName|undefined;
+											if(v.type==null) throw new Error(`Expected type for argument at: ${_errorFile(srcFile, v)}`);
+											else gtype= _importName((v.type as ts.TypeReferenceNode).typeName ?? v.type, typeChecker);
+											
+											if(gtype==null) throw new Error(`Unexpected type: ${v.type?.getText()} at: ${_errorFile(srcFile, v)}`);
+											return gtype;
+										})
 									}
 								});
-								// Params
-								console.log('-------- ', symbName ,';', mNode.name.getText())
-								mNode.parameters.forEach((v, i)=>{
-									console.log('==', v.name.getText(), '::', v.type?.getText(), typeChecker.getTypeAtLocation(v.type!)?.symbol?.declarations?.[0].getText())
-
-								})
 								break;
 						}
 					}
@@ -435,7 +440,10 @@ function _injectData(program: ts.Program, srcFile: ts.SourceFile, results: Map<s
 		let f= ts.factory;
 		const relativeDirname= relative(process.cwd(), dirname(srcFile.fileName));
 		imports.forEach(function(blocks, fileName){
-			let importPath= _relative(relativeDirname, fileName.replace(/\.ts$/,''));
+			let importPath: string;
+			let isGridfw= fileName==='gridfw';
+			if(isGridfw) importPath= fileName;
+			else importPath = _relative(relativeDirname, fileName.replace(/\.ts$/,''));
 			let specifiers: ts.ImportSpecifier[]= [];
 			blocks.forEach(function(varId, className){
 				specifiers.push(
@@ -445,7 +453,7 @@ function _injectData(program: ts.Program, srcFile: ts.SourceFile, results: Map<s
 			statements.push(
 				f.createImportDeclaration(
 					undefined, undefined,
-					f.createImportClause(false, undefined, f.createNamedImports(specifiers)),
+					f.createImportClause(isGridfw, undefined, f.createNamedImports(specifiers)),
 					f.createStringLiteral(importPath)
 				),
 			);
@@ -477,6 +485,7 @@ function _injectdataVisitor(
 ): ts.Transformer<ts.Node>{
 	const typeChecker= program.getTypeChecker();
 	const f= ctx.factory;
+	// Return visitor
 	return _visitor;
 	/** Visitor */
 	function _visitor(node: ts.Node): ts.Node{
@@ -530,21 +539,8 @@ function _injectdataVisitor(
 			for(let j=0, methods= item.methods, jlen= methods.length; j<jlen; ++j){
 				let m= methods[j];
 				// Generate class import
-				let c= m.controller;
-				let clMap= imports.get(c.file);
-				let classVar: ts.Identifier|undefined;
-				if(clMap==null){
-					clMap= new Map();
-					imports.set(c.file, clMap);
-					classVar= f.createUniqueName(c.cName);
-					clMap.set(c.cName, classVar);
-				} else {
-					classVar= clMap.get(c.cName);
-					if(classVar==null){
-						classVar= f.createUniqueName(c.cName);
-						clMap.set(c.cName, classVar);
-					}
-				}
+				let cntrlDescript= m.controller
+				let classVar= _genImport(cntrlDescript.file, cntrlDescript.cName);
 				// Generate method
 				let methodArgs: ts.Expression[];
 				if(m.method==='method'){
@@ -561,11 +557,11 @@ function _injectdataVisitor(
 				} else {
 					methodArgs= [];
 				}
+				// Method access
+				let methodExp: ts.Expression;
+				if(cntrlDescript.params)
 				// Add method declaration
-				methodArgs.push(f.createPropertyAccessExpression(
-					classVar,
-					f.createIdentifier(c.isStatic===true ? c.name : `prototype.${c.name}`)
-				));
+				_genRouteMethod(block, methodArgs, classVar, cntrlDescript, f, pretty, _genImport);
 				// push method block
 				block.push(f.createExpressionStatement(f.createCallExpression(
 					f.createPropertyAccessExpression(rt, m.method ),
@@ -578,20 +574,7 @@ function _injectdataVisitor(
 		for(let i=0, i18nArr= r.i18n, len=i18nArr.length; i<len; ++i){
 			let i18n= i18nArr[i];
 			//* Generate class import
-			let clMap= imports.get(i18n.filename);
-			let i18nVar: ts.Identifier|undefined;
-			if(clMap==null){
-				clMap= new Map();
-				imports.set(i18n.filename, clMap);
-				i18nVar= f.createUniqueName(i18n.varname);
-				clMap.set(i18n.varname, i18nVar);
-			} else {
-				i18nVar= clMap.get(i18n.varname);
-				if(i18nVar==null){
-					i18nVar= f.createUniqueName(i18n.varname);
-					clMap.set(i18n.varname, i18nVar);
-				}
-			}
+			let i18nVar= _genImport(i18n.filename, i18n.varname);
 			//* Add
 			i18nVars.push(i18nVar);
 		}
@@ -601,6 +584,24 @@ function _injectdataVisitor(
 				undefined, i18nVars
 			)));
 		return block;
+	}
+	/** Generate imports */
+	function _genImport(file: string, moduleName: string){
+		let clMap= imports.get(file);
+		let classVar: ts.Identifier|undefined;
+		if(clMap==null){
+			clMap= new Map();
+			imports.set(file, clMap);
+			classVar= f.createUniqueName(moduleName);
+			clMap.set(moduleName, classVar);
+		} else {
+			classVar= clMap.get(moduleName);
+			if(classVar==null){
+				classVar= f.createUniqueName(moduleName);
+				clMap.set(moduleName, classVar);
+			}
+		}
+		return classVar;
 	}
 }
 
@@ -613,3 +614,66 @@ function _relative(from: string, to: string){
 	return p;
 }
 
+
+/** Router native signature */
+const routerNativeMethodSignature= ['Request', 'Response'] as const;
+const routerNativeMethodSignatureLen= routerNativeMethodSignature.length;
+/** Check method matches Router native signature */
+function _matchesNativeMethodSignature(params: ImportName[]){
+	if(params.length>routerNativeMethodSignatureLen) return false;
+	for(let i=0, len= params.length; i<len; ++i){
+		let p= params[i];
+		if(p.isGridfw===false || p.name !== routerNativeMethodSignature[i]) return false;
+	}
+	return true;
+}
+
+/** Create controller method wrapper */
+function _genRouteMethod(
+	block: ts.Statement[],
+	methodArgs: ts.Expression[],
+	classVar: ts.Identifier, c: CntrlDesc, f:ts.NodeFactory, pretty: boolean,
+	_genImport: (file: string, moduleName: string)=> ts.Identifier
+): void {
+	var params= c.params;
+	if(_matchesNativeMethodSignature(params)){
+		//* Matches Router native signature
+		methodArgs.push(f.createPropertyAccessExpression(
+			classVar,
+			f.createIdentifier(c.isStatic===true ? c.name : `prototype.${c.name}`)
+		));
+	} else {
+		let reqId= _genImport('gridfw', 'Request');
+		let respId= _genImport('gridfw', 'Response');
+		//* Create var to access method
+		let methodVar= f.createUniqueName(c.name);
+		block.push(f.createVariableStatement(undefined, f.createVariableDeclarationList([
+			f.createVariableDeclaration(methodVar, undefined, undefined,
+				f.createPropertyAccessExpression(
+					classVar,
+					f.createIdentifier(c.isStatic===true ? c.name : `prototype.${c.name}`)
+				)
+			)
+		])));
+		//* Create wrapper
+		methodArgs.push(f.createFunctionExpression(undefined, undefined, undefined, undefined, [
+			f.createParameterDeclaration(
+				undefined, undefined, undefined, 'req', undefined,
+				f.createTypeReferenceNode( reqId, [
+					f.createKeywordTypeNode(ts.SyntaxKind.AnyKeyword),
+					f.createKeywordTypeNode(ts.SyntaxKind.AnyKeyword)
+				])
+			),
+			f.createParameterDeclaration(
+				undefined, undefined, undefined, 'resp', undefined,
+				f.createTypeReferenceNode( respId, [
+					f.createKeywordTypeNode(ts.SyntaxKind.AnyKeyword),
+					f.createKeywordTypeNode(ts.SyntaxKind.AnyKeyword)
+				])
+			),
+		], undefined, f.createBlock([
+			//TODO
+			f.createReturnStatement(methodVar)
+		], pretty)));
+	}
+}
