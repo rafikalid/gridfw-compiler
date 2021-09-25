@@ -23,11 +23,13 @@
   "homepage": "https://github.com/rafikalid/gridfw-compiler#readme",
   "dependencies": {
     "chalk": "^4.1.2",
+    "ejs": "^3.1.6",
     "pug": "^3.0.2",
     "through2": "^4.0.2",
     "typescript": "^4.3.5"
   },
   "devDependencies": {
+    "@types/ejs": "^3.1.0",
     "@types/gulp": "^4.0.8",
     "@types/gulp-sourcemaps": "^0.0.34",
     "@types/pug": "^2.0.5",
