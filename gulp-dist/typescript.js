@@ -1,49 +1,57 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.compileCommonjs = exports.compileEsNext = void 0;
 /**
  * Compile Typescript files
  */
-import Gulp from 'gulp';
-import GulpTypescript from 'gulp-typescript';
-import SrcMap from 'gulp-sourcemaps';
-import { createImportTransformer } from './typescript-transformer.js';
-import JSON5 from 'json5';
-import { readFileSync } from 'fs';
-const { src, dest, lastRun } = Gulp;
-const { parse } = JSON5;
+const gulp_1 = __importDefault(require("gulp"));
+const gulp_typescript_1 = __importDefault(require("gulp-typescript"));
+const gulp_sourcemaps_1 = __importDefault(require("gulp-sourcemaps"));
+const typescript_path_fix_1 = require("typescript-path-fix");
+const gulp_rename_1 = __importDefault(require("gulp-rename"));
+const { src, dest, lastRun } = gulp_1.default;
 // import {transform} from 'ts-transform-import-path-rewrite'
-//Load config
-const tsConfig = parse(readFileSync('tsconfig.json', 'utf-8'));
-const importTransformer = createImportTransformer(tsConfig.compilerOptions);
 const isProd = process.argv.includes('--prod');
-const TsProject = GulpTypescript.createProject('tsconfig.json', {
+const tsPathFix = new typescript_path_fix_1.Converter('tsconfig.json');
+const TsProject = gulp_typescript_1.default.createProject('tsconfig.json', {
     removeComments: isProd,
     pretty: !isProd,
-    getCustomTransformers: () => ({
-        after: [
-            importTransformer
-        ]
-    })
+    target: 'ESNext',
+    module: 'ESNext'
 });
-const TsProjectTest = GulpTypescript.createProject('tsconfig.json', {
+const TsProjectCommonjs = gulp_typescript_1.default.createProject('tsconfig.json', {
     removeComments: isProd,
     pretty: !isProd,
-    getCustomTransformers: () => ({
-        after: [
-            importTransformer
-        ]
-    })
+    target: 'ES2015',
+    module: 'CommonJS'
 });
-// import babel from 'gulp-babel';
-export function typescriptCompile() {
-    return src('src/**/*.ts', { nodir: true, since: lastRun(typescriptCompile) })
-        .pipe(SrcMap.init())
+/** Compile as EsNext */
+function compileEsNext() {
+    return src('src/**/*.ts', {
+        nodir: true,
+        since: lastRun(compileEsNext)
+    })
+        .pipe(gulp_sourcemaps_1.default.init())
+        .pipe(tsPathFix.gulp())
         .pipe(TsProject())
-        .pipe(SrcMap.write('.'))
-        .pipe(dest('dist'));
+        .pipe(gulp_rename_1.default({ extname: '.mjs' }))
+        .pipe(gulp_sourcemaps_1.default.write('.'))
+        .pipe(dest('dist/module'));
 }
-export function compileTestFiles() {
-    return src('test/**/*.ts', { nodir: true, since: lastRun(compileTestFiles) })
-        .pipe(SrcMap.init())
-        .pipe(TsProjectTest())
-        .pipe(SrcMap.write('.'))
-        .pipe(dest('dist-test'));
+exports.compileEsNext = compileEsNext;
+/** Compile as Commonjs */
+function compileCommonjs() {
+    return src('src/**/*.ts', {
+        nodir: true,
+        since: lastRun(compileCommonjs)
+    })
+        .pipe(gulp_sourcemaps_1.default.init())
+        .pipe(tsPathFix.gulp())
+        .pipe(TsProjectCommonjs())
+        .pipe(gulp_sourcemaps_1.default.write('.'))
+        .pipe(dest('dist/commonjs'));
 }
+exports.compileCommonjs = compileCommonjs;
