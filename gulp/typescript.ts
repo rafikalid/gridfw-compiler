@@ -35,8 +35,8 @@ export function compileEsNext() {
 	})
 		.pipe(SrcMap.init())
 		.pipe(TsProject())
-		.pipe(GulpRename({ extname: '.mjs' }))
 		.pipe(tsPathFix.gulp('.mjs'))
+		.pipe(GulpRename({ extname: '.mjs' }))
 		.pipe(SrcMap.write('.'))
 		.pipe(dest('dist/module'));
 }

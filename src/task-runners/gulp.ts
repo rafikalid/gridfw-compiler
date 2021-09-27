@@ -62,7 +62,7 @@ export function parseTsConfig(tsConfigPath: string) {
  * Prepare views for final compiling
  * Apply i18n & precompiling logic
  */
-export async function gulpInitViews<T>(
+export function gulpInitViews<T>(
 	/** Glob selector to compiled time i18n files */
 	i18nGlobPattern: string,
 	/** Aditional data to the compiler */
@@ -122,7 +122,7 @@ function _resolveI18n(globPattern: string, i18nVarname: string) {
 	const i18nMap: Map<string, Record<string, any>> = new Map();
 	for (let i = 0; i < len; ++i) {
 		let file = files[i];
-		if (requireCache.hasOwnProperty(file)) requireCache[file] = undefined;
+		if (Reflect.has(requireCache, file)) requireCache[file] = undefined;
 		let m = requireLib(file)?.[i18nVarname];
 		let locale = m?.locale;
 		if (typeof locale !== 'string')
