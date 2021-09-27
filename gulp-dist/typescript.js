@@ -35,9 +35,9 @@ function compileEsNext() {
         since: lastRun(compileEsNext)
     })
         .pipe(gulp_sourcemaps_1.default.init())
-        .pipe(tsPathFix.gulp())
         .pipe(TsProject())
         .pipe(gulp_rename_1.default({ extname: '.mjs' }))
+        .pipe(tsPathFix.gulp('.mjs'))
         .pipe(gulp_sourcemaps_1.default.write('.'))
         .pipe(dest('dist/module'));
 }
@@ -49,8 +49,8 @@ function compileCommonjs() {
         since: lastRun(compileCommonjs)
     })
         .pipe(gulp_sourcemaps_1.default.init())
-        .pipe(tsPathFix.gulp())
         .pipe(TsProjectCommonjs())
+        .pipe(tsPathFix.gulp())
         .pipe(gulp_sourcemaps_1.default.write('.'))
         .pipe(dest('dist/commonjs'));
 }

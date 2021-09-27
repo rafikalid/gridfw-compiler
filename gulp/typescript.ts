@@ -34,9 +34,9 @@ export function compileEsNext() {
 		since: lastRun(compileEsNext)
 	})
 		.pipe(SrcMap.init())
-		.pipe(tsPathFix.gulp())
 		.pipe(TsProject())
 		.pipe(GulpRename({ extname: '.mjs' }))
+		.pipe(tsPathFix.gulp('.mjs'))
 		.pipe(SrcMap.write('.'))
 		.pipe(dest('dist/module'));
 }
@@ -48,8 +48,8 @@ export function compileCommonjs() {
 		since: lastRun(compileCommonjs)
 	})
 		.pipe(SrcMap.init())
-		.pipe(tsPathFix.gulp())
 		.pipe(TsProjectCommonjs())
+		.pipe(tsPathFix.gulp())
 		.pipe(SrcMap.write('.'))
 		.pipe(dest('dist/commonjs'));
 }
