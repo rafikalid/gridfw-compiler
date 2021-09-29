@@ -7,6 +7,9 @@ import type { Transform } from 'stream';
 import EJS from 'ejs';
 import Glob from 'glob';
 import { createRequire } from 'module';
+import { execModule } from '@src/utils/exec-modules';
+
+//TODO create converter
 
 // Create require if es scope
 const requireLib =
@@ -117,23 +120,24 @@ function _resolveI18n(globPattern: string, i18nVarname: string) {
 	if (len === 0) {
 		throw new Error(`No file found for pattern: ${globPattern}`);
 	}
-	// Load locales
-	const requireCache = requireLib.cache;
+	// Compile i18n files
 	const i18nMap: Map<string, Record<string, any>> = new Map();
 	for (let i = 0; i < len; ++i) {
-		let file = files[i];
-		if (Reflect.has(requireCache, file)) requireCache[file] = undefined;
-		let m = requireLib(file)?.[i18nVarname];
-		let locale = m?.locale;
+		let filePath = files[i];
+		let i18n = execModule(
+			filePath,
+			ts.transpile(readFileSync(filePath, 'utf-8'))
+		).exports?.[i18nVarname];
+		let locale = i18n?.locale;
 		if (typeof locale !== 'string')
 			throw new Error(
-				`Missing "${i18nVarname}.locale" inside file: ${file}`
+				`Missing "${i18nVarname}.locale" in file: ${filePath}`
 			);
 		if (i18nMap.has(locale))
 			throw new Error(
-				`Duplicated locale "${locale}". Last one in: ${file}`
+				`Duplicate locale: ${locale}. Last found at: ${filePath}`
 			);
-		i18nMap.set(locale, m);
+		i18nMap.set(locale, i18n);
 	}
 	return i18nMap;
 }
