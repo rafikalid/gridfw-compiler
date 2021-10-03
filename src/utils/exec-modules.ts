@@ -1,12 +1,12 @@
 import { createRequire } from 'module';
-import { dirname } from 'path';
+import { dirname, resolve } from 'path';
 import { runInContext, createContext } from 'vm';
 /**
  * Exec commonjs modules
  */
 export function execModule(filePath: string, content: string): Module {
 	const module: Module = {
-		require: createRequire(filePath),
+		require: createRequire(resolve(filePath)),
 		exports: {}
 	};
 	// Context

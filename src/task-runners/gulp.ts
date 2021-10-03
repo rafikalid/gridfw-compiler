@@ -8,6 +8,7 @@ import EJS from 'ejs';
 import Glob from 'glob';
 import { createRequire } from 'module';
 import { execModule } from '@src/utils/exec-modules';
+import { dirname, basename, join } from 'path';
 
 //TODO create converter
 
@@ -56,7 +57,7 @@ export function parseTsConfig(tsConfigPath: string) {
 	if (tsP2.errors?.length)
 		throw new Error(
 			'Config file parse fails:' +
-				tsP2.errors.map(e => e.messageText.toString())
+			tsP2.errors.map(e => e.messageText.toString())
 		);
 	return tsP2.options;
 }
@@ -71,21 +72,19 @@ export function gulpInitViews<T>(
 	/** Aditional data to the compiler */
 	data?: T,
 	/** i18n var name inside files */
-	i18nVarname: string = 'i18n',
+	i18nVarName: string = 'i18n',
 	/** Custom Compiler */
 	render: (content: string, data: T) => string = _ejs
 ) {
 	// Load i18n files
-	var i18n = _resolveI18n(i18nGlobPattern, i18nVarname);
-	// data
-	data = { ...data, i18n } as any as T;
+	var i18nMap = _resolveI18n(i18nGlobPattern, i18nVarName);
 	// Executor
 	return Through.obj(function (
 		file: Vinyl,
 		_: any,
 		cb: Through.TransformCallback
 	) {
-		var err: any = null;
+		var err: Error | null = null;
 		try {
 			// Exclude streams
 			if (file.isStream())
@@ -97,13 +96,30 @@ export function gulpInitViews<T>(
 				? file.contents.toString('utf-8')
 				: readFileSync(file.path, 'utf-8');
 			// Compile content
-			content = render(content, data!);
-			// Save
-			file.contents = Buffer.from(content);
-		} catch (e) {
-			err = e ?? 'ERROR!';
+			var errors: any[] = [];
+			const fileDir = dirname(file.path);
+			const fileName = basename(file.path);
+			i18nMap.forEach((i18n) => {
+				try {
+					// Compile
+					let compiled = render(content, { ...data, i18n } as any as T);
+					// Save
+					this.push(new Vinyl({
+						base: file.base,
+						cwd: file.cwd,
+						path: join(fileDir, i18n.locale, fileName),
+						contents: Buffer.from(compiled)
+					}));
+				} catch (e) {
+					errors.push(e);
+				}
+			});
+			if (errors.length)
+				throw new Error(`Error at: ${file.path}\n${errors.map(e => e?.stack ?? e).join("\n")}`);
+		} catch (e: any) {
+			err = e ?? new Error('ERROR!');
 		}
-		cb(err, file);
+		cb(err);
 	});
 }
 
@@ -113,7 +129,7 @@ function _ejs(content: string, data: Record<string, any>) {
 }
 
 /** Resolve i18n */
-function _resolveI18n(globPattern: string, i18nVarname: string) {
+function _resolveI18n(globPattern: string, i18nVarName: string) {
 	// Load i18n files
 	var files = Glob.sync(globPattern);
 	var len = files.length;
@@ -127,11 +143,11 @@ function _resolveI18n(globPattern: string, i18nVarname: string) {
 		let i18n = execModule(
 			filePath,
 			ts.transpile(readFileSync(filePath, 'utf-8'))
-		).exports?.[i18nVarname];
+		).exports?.[i18nVarName];
 		let locale = i18n?.locale;
 		if (typeof locale !== 'string')
 			throw new Error(
-				`Missing "${i18nVarname}.locale" in file: ${filePath}`
+				`Missing "${i18nVarName}.locale" in file: ${filePath}`
 			);
 		if (i18nMap.has(locale))
 			throw new Error(

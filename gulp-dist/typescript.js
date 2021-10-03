@@ -49,8 +49,8 @@ function compileCommonjs() {
         since: lastRun(compileCommonjs)
     })
         .pipe(gulp_sourcemaps_1.default.init())
-        .pipe(TsProjectCommonjs())
         .pipe(tsPathFix.gulp())
+        .pipe(TsProjectCommonjs())
         .pipe(gulp_sourcemaps_1.default.write('.'))
         .pipe(dest('dist/commonjs'));
 }

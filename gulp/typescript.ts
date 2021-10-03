@@ -48,8 +48,8 @@ export function compileCommonjs() {
 		since: lastRun(compileCommonjs)
 	})
 		.pipe(SrcMap.init())
-		.pipe(TsProjectCommonjs())
 		.pipe(tsPathFix.gulp())
+		.pipe(TsProjectCommonjs())
 		.pipe(SrcMap.write('.'))
 		.pipe(dest('dist/commonjs'));
 }
