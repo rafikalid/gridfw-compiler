@@ -37,7 +37,7 @@ function compileEsNext() {
         .pipe(gulp_sourcemaps_1.default.init())
         .pipe(TsProject())
         .pipe(tsPathFix.gulp('.mjs'))
-        .pipe(gulp_rename_1.default({ extname: '.mjs' }))
+        .pipe((0, gulp_rename_1.default)({ extname: '.mjs' }))
         .pipe(gulp_sourcemaps_1.default.write('.'))
         .pipe(dest('dist/module'));
 }
