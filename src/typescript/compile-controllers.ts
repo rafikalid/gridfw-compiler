@@ -65,9 +65,11 @@ interface CntrlDesc {
 	/** Method's name */
 	name: string
 	/** Is static method */
-	isStatic: boolean,
+	// isStatic: boolean,
 	/** Params */
 	params: ImportName[]
+	/** Return value */
+	returns: ImportName | undefined
 }
 
 /** Files compilation result */
@@ -131,14 +133,14 @@ function _parseFiles(globPaths: string[], filesMap: Map<string, ts.SourceFile>, 
 	for (let i = 0, len = globPaths.length; i < len; ++i) {
 		//* Load file
 		let filePath = globPaths[i];
-		let srcFile = filesMap.get(filePath)!;
+		let srcFile = filesMap.get(filePath);
 		if (srcFile == null)
 			throw new Error(`Missing file from compilation pipeline: ${filePath}`);
 		//* If file needs imports (like pug runtime lib)
 		const addedImports: ts.Statement[] = [];
 		//* Parse
 		srcFile = ts.transform(srcFile, [function (ctx: ts.TransformationContext): ts.Transformer<ts.Node> {
-			return parseTs(program, ctx, srcFile, results, addedImports, compilerOptions);
+			return parseTs(program, ctx, srcFile!, results, addedImports, compilerOptions);
 		}], compilerOptions).transformed[0] as ts.SourceFile;
 		//* Add imports
 		if (addedImports.length > 0) {
@@ -234,6 +236,9 @@ function parseTs(
 							case 'post':
 							case 'method':
 							case 'ws':
+								// Ignore static methods
+								if (mNode.modifiers?.some(n => n.kind === ts.SyntaxKind.StaticKeyword))
+									throw new Error(`Unexpected "${symbName.toUpperCase()}" method as static at: ${_errorFile(srcFile, mNode)}`);
 								// @get("/route")
 								resultItem.methods.push({
 									method: symbName,
@@ -242,15 +247,16 @@ function parseTs(
 										file: srcFile.fileName,
 										cName: (mNode.parent as ts.ClassDeclaration).name!.getText(),
 										name: mNode.name.getText(),
-										isStatic: mNode.modifiers?.some(n => n.kind === ts.SyntaxKind.StaticKeyword) ?? false,
+										// isStatic: mNode.modifiers?.some(n => n.kind === ts.SyntaxKind.StaticKeyword) ?? false,
 										params: mNode.parameters.map(function (v) {
-											var gtype: ImportName | undefined;
+											var gType: ImportName | undefined;
 											if (v.type == null) throw new Error(`Expected type for argument at: ${_errorFile(srcFile, v)}`);
-											else gtype = _importName((v.type as ts.TypeReferenceNode).typeName ?? v.type, typeChecker);
-
-											if (gtype == null) throw new Error(`Unexpected type: ${v.type?.getText()} at: ${_errorFile(srcFile, v)}`);
-											return gtype;
-										})
+											gType = _importName((v.type as ts.TypeReferenceNode).typeName ?? v.type, typeChecker);
+											if (gType == null) throw new Error(`Unexpected type: ${v.type?.getText()} at: ${_errorFile(srcFile, v)}`);
+											gType.node = v.type;
+											return gType;
+										}),
+										returns: mNode.type && _importName(mNode.type, typeChecker)
 									}
 								});
 								continue decoFor;
@@ -304,7 +310,7 @@ function parseTs(
 						);
 				}
 				break;
-			//* Go through childs
+			//* Go through children
 			case ts.SyntaxKind.SyntaxList:
 			case ts.SyntaxKind.SourceFile:
 				node = ts.visitEachChild(node, _visitor, ctx);
@@ -432,7 +438,7 @@ function _injectData(program: ts.Program, srcFile: ts.SourceFile, results: Map<s
 	var imports: ImportsTp = new Map();
 	// Inject data
 	srcFile = ts.transform(srcFile, [function (ctx: ts.TransformationContext): ts.Transformer<ts.Node> {
-		return _injectdataVisitor(program, ctx, srcFile, results, imports, pretty);
+		return _injectDataVisitor(program, ctx, srcFile, results, imports, pretty);
 	}], program.getCompilerOptions()).transformed[0] as ts.SourceFile;
 	// Inject imports
 	if (imports.size) {
@@ -502,8 +508,8 @@ type ImportsTp = Map<string, Map<string, {
 	isClass: boolean
 }>>;
 
-/** iject visitor */
-function _injectdataVisitor(
+/** Inject visitor */
+function _injectDataVisitor(
 	program: ts.Program,
 	ctx: ts.TransformationContext,
 	srcFile: ts.SourceFile,
@@ -527,7 +533,7 @@ function _injectdataVisitor(
 			) {
 				let p = node.arguments[0].getText();
 				let r = results.get(p);
-				if (r == null) throw new Error(`Enexpected missing pattern ${p} at ${_errorFile(srcFile, node)}`);
+				if (r == null) throw new Error(`Unexpected missing pattern ${p} at ${_errorFile(srcFile, node)}`);
 				let block = _compileResults(r, node.expression.getFirstToken() as ts.Identifier);
 				node = f.createCallExpression(
 					f.createParenthesizedExpression(
@@ -675,6 +681,40 @@ function _genRouteMethod(
 	} else {
 		let reqId = _genImport('gridfw', 'Request', false);
 		let respId = _genImport('gridfw', 'Response', false);
+		//* Prepare params
+		let methodParams: ts.Expression[] = [];
+		for (let i = 0, len = params.length; i < len; ++i) {
+			let param = params[i];
+			if (param.isGridfw) {
+				switch (param.name) {
+					case 'Request':
+						methodParams.push(f.createIdentifier('req'));
+						break;
+					case 'Response':
+						methodParams.push(f.createIdentifier('resp'));
+						break;
+					case 'Query':
+					case 'Path': {
+						// Target obj
+						let arg = (param.node as ts.TypeReferenceNode).typeArguments![0]!;
+						if (arg.kind === ts.SyntaxKind.AnyKeyword) {
+							methodParams.push(
+								f.createPropertyAccessExpression(
+									f.createIdentifier('req'), param.name === 'Query' ? 'query' : 'params'
+								));
+						} else {
+							//TODO tt-model
+							methodParams.push(f.createIdentifier('req'));
+						}
+						break;
+					}
+					default:
+						throw new Error(`Unexpected Gridfw keyword: ${param.name}`);
+				}
+			} else {
+				//TODO
+			}
+		}
 		//* Create wrapper
 		methodArgs.push(f.createFunctionExpression(undefined, undefined, undefined, undefined, [
 			f.createParameterDeclaration(
@@ -694,10 +734,11 @@ function _genRouteMethod(
 		], undefined, f.createBlock([
 			//TODO
 			f.createReturnStatement(
-				f.createPropertyAccessExpression(
-					classVar,
-					f.createIdentifier(c.name)
-					// f.createIdentifier(c.isStatic === true ? c.name : `prototype.${c.name}`)
+				f.createCallExpression(
+					f.createPropertyAccessExpression(
+						classVar,
+						f.createIdentifier(c.name)
+					), undefined, methodParams
 				)
 			)
 		], pretty)));

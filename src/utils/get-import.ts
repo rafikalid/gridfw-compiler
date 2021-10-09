@@ -1,24 +1,27 @@
 import ts from "typescript";
 
-export function _importName(node: ts.Node, typeChecker: ts.TypeChecker): ImportName|undefined{
-	var s= typeChecker.getSymbolAtLocation(node)?.declarations?.[0];
-	if(s!=null && ts.isImportSpecifier(s)){
-		let lib= s.parent.parent.parent.moduleSpecifier.getText().slice(1,-1);
+export function _importName(node: ts.Node, typeChecker: ts.TypeChecker): ImportName | undefined {
+	var s = typeChecker.getSymbolAtLocation(node)?.declarations?.[0];
+	if (s != null && ts.isImportSpecifier(s)) {
+		let lib = s.parent.parent.parent.moduleSpecifier.getText().slice(1, -1);
 		return {
-			name:		s.propertyName?.getText() ?? s.name.getText(),
-			lib:		lib,
-			isGridfw:	lib==='gridfw'
+			name: s.propertyName?.getText() ?? s.name.getText(),
+			lib: lib,
+			isGridfw: lib === 'gridfw',
+			node: undefined
 		}
 	}
 }
 
-export interface ImportName{
+export interface ImportName {
 	/** Import var name */
-	name:	string
+	name: string
 	/** Lib name */
-	lib:	string
+	lib: string
 	/** is from gridfw */
-	isGridfw:	boolean
+	isGridfw: boolean
+	/** Node: for more operations */
+	node: ts.Node | undefined
 }
 
 // /** Get type name && check if is from Gridfw */
