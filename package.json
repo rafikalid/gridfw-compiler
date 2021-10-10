@@ -1,6 +1,6 @@
 {
 	"name": "gridfw-compiler",
-	"version": "2.0.1",
+	"version": "2.0.2",
 	"description": "Compiler for Gridfw",
 	"main": "dist/commonjs/index.js",
 	"exports": {
@@ -38,6 +38,7 @@
 		"@types/gulp-sourcemaps": "^0.0.35",
 		"@types/pug": "^2.0.5",
 		"@types/through2": "^2.0.36",
+		"@types/uglify-js": "^3.13.1",
 		"@types/vinyl": "^2.0.6",
 		"eslint": "^7.32.0",
 		"gridfw-compiler": "^2.0.0",
@@ -48,6 +49,7 @@
 		"json5": "^2.2.0",
 		"typescript": "^4.3.5",
 		"typescript-path-fix": "^1.0.8",
+		"uglify-js": "^3.14.2",
 		"vinyl": "^2.2.1"
 	}
 }

@@ -649,20 +649,6 @@ function _relative(from: string, to: string) {
 	return p;
 }
 
-
-/** Router native signature */
-const routerNativeMethodSignature = ['Request', 'Response'] as const;
-const routerNativeMethodSignatureLen = routerNativeMethodSignature.length;
-/** Check method matches Router native signature */
-function _matchesNativeMethodSignature(params: ImportName[]) {
-	if (params.length > routerNativeMethodSignatureLen) return false;
-	for (let i = 0, len = params.length; i < len; ++i) {
-		let p = params[i];
-		if (p.isGridfw === false || p.name !== routerNativeMethodSignature[i]) return false;
-	}
-	return true;
-}
-
 /** Create controller method wrapper */
 function _genRouteMethod(
 	block: ts.Statement[],
@@ -671,76 +657,79 @@ function _genRouteMethod(
 	_genImport: (file: string, moduleName: string, isClass: boolean) => ts.Identifier
 ): void {
 	var params = c.params;
-	if (_matchesNativeMethodSignature(params)) {
-		//* Matches Router native signature
-		methodArgs.push(f.createPropertyAccessExpression(
+	let reqId = _genImport('gridfw', 'Request', false);
+	let respId = _genImport('gridfw', 'Response', false);
+	let body: ts.Statement[] = [];
+	/** Use async only when needed */
+	let doUseAsync = false;
+	//* Prepare params
+	let methodParams: ts.Expression[] = [];
+	for (let i = 0, len = params.length; i < len; ++i) {
+		let param = params[i];
+		if (param.isGridfw) {
+			switch (param.name) {
+				case 'Request':
+					methodParams.push(f.createIdentifier('req'));
+					break;
+				case 'Response':
+					methodParams.push(f.createIdentifier('resp'));
+					break;
+				case 'Query':
+				case 'Path': {
+					// Target obj
+					let arg = (param.node as ts.TypeReferenceNode).typeArguments![0]!;
+					if (arg.kind === ts.SyntaxKind.AnyKeyword) {
+						methodParams.push(
+							f.createPropertyAccessExpression(
+								f.createIdentifier('req'), param.name === 'Query' ? 'query' : 'params'
+							));
+					} else {
+						//TODO tt-model
+						methodParams.push(f.createIdentifier('req'));
+					}
+					break;
+				}
+				default:
+					throw new Error(`Unexpected Gridfw keyword: ${param.name}`);
+			}
+		} else {
+			//TODO
+		}
+	}
+	//* call controller
+	let cVar = f.createUniqueName('ref');
+	let callFx: ts.Expression = f.createCallExpression(
+		f.createPropertyAccessExpression(
 			classVar,
 			f.createIdentifier(c.name)
-			// f.createIdentifier(c.isStatic === true ? c.name : `prototype.${c.name}`)
-		));
-	} else {
-		let reqId = _genImport('gridfw', 'Request', false);
-		let respId = _genImport('gridfw', 'Response', false);
-		//* Prepare params
-		let methodParams: ts.Expression[] = [];
-		for (let i = 0, len = params.length; i < len; ++i) {
-			let param = params[i];
-			if (param.isGridfw) {
-				switch (param.name) {
-					case 'Request':
-						methodParams.push(f.createIdentifier('req'));
-						break;
-					case 'Response':
-						methodParams.push(f.createIdentifier('resp'));
-						break;
-					case 'Query':
-					case 'Path': {
-						// Target obj
-						let arg = (param.node as ts.TypeReferenceNode).typeArguments![0]!;
-						if (arg.kind === ts.SyntaxKind.AnyKeyword) {
-							methodParams.push(
-								f.createPropertyAccessExpression(
-									f.createIdentifier('req'), param.name === 'Query' ? 'query' : 'params'
-								));
-						} else {
-							//TODO tt-model
-							methodParams.push(f.createIdentifier('req'));
-						}
-						break;
-					}
-					default:
-						throw new Error(`Unexpected Gridfw keyword: ${param.name}`);
-				}
-			} else {
-				//TODO
-			}
-		}
-		//* Create wrapper
-		methodArgs.push(f.createFunctionExpression(undefined, undefined, undefined, undefined, [
-			f.createParameterDeclaration(
-				undefined, undefined, undefined, 'req', undefined,
-				f.createTypeReferenceNode(reqId, [
-					f.createKeywordTypeNode(ts.SyntaxKind.AnyKeyword),
-					f.createKeywordTypeNode(ts.SyntaxKind.AnyKeyword)
-				])
-			),
-			f.createParameterDeclaration(
-				undefined, undefined, undefined, 'resp', undefined,
-				f.createTypeReferenceNode(respId, [
-					f.createKeywordTypeNode(ts.SyntaxKind.AnyKeyword),
-					f.createKeywordTypeNode(ts.SyntaxKind.AnyKeyword)
-				])
-			),
-		], undefined, f.createBlock([
-			//TODO
-			f.createReturnStatement(
-				f.createCallExpression(
-					f.createPropertyAccessExpression(
-						classVar,
-						f.createIdentifier(c.name)
-					), undefined, methodParams
-				)
-			)
-		], pretty)));
-	}
+		), undefined, methodParams
+	);
+	if (doUseAsync) callFx = f.createAwaitExpression(callFx);
+	body.push(
+		f.createVariableStatement(undefined, [
+			f.createVariableDeclaration(cVar, undefined, undefined, callFx)
+		])
+	);
+	//* Process Return value
+	body.push(f.createReturnStatement(cVar));
+	//* Create wrapper
+	methodArgs.push(f.createFunctionExpression(
+		doUseAsync ? [f.createModifier(ts.SyntaxKind.AsyncKeyword)] : undefined,
+		undefined, undefined, undefined, [
+		f.createParameterDeclaration(
+			undefined, undefined, undefined, 'req', undefined,
+			f.createTypeReferenceNode(reqId, [
+				f.createKeywordTypeNode(ts.SyntaxKind.AnyKeyword),
+				f.createKeywordTypeNode(ts.SyntaxKind.AnyKeyword)
+			])
+		),
+		f.createParameterDeclaration(
+			undefined, undefined, undefined, 'resp', undefined,
+			f.createTypeReferenceNode(respId, [
+				f.createKeywordTypeNode(ts.SyntaxKind.AnyKeyword),
+				f.createKeywordTypeNode(ts.SyntaxKind.AnyKeyword)
+			])
+		),
+	], undefined, f.createBlock(body, pretty))
+	);
 }
