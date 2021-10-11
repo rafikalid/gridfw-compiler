@@ -69,7 +69,9 @@ interface CntrlDesc {
 	/** Params */
 	params: ImportName[]
 	/** Return value */
-	returns: ImportName | undefined
+	returns: ImportName | undefined,
+	/** If controller has promise in it */
+	hasPromise: boolean
 }
 
 /** Files compilation result */
@@ -256,7 +258,14 @@ function parseTs(
 											gType.node = v.type;
 											return gType;
 										}),
-										returns: mNode.type && _importName(mNode.type, typeChecker)
+										returns: mNode.type && _importName(mNode.type, typeChecker),
+										hasPromise:
+											mNode.modifiers?.some(m => m.kind === ts.SyntaxKind.AsyncKeyword) ||
+											typeChecker.getSignaturesOfType(
+												typeChecker.getTypeAtLocation(mNode), ts.SignatureKind.Call
+											).some(s =>
+												// TODO Make better solution for performance purpose
+												typeChecker.typeToString(s.getReturnType()).startsWith('Promise<'))
 									}
 								});
 								continue decoFor;
@@ -661,7 +670,9 @@ function _genRouteMethod(
 	let respId = _genImport('gridfw', 'Response', false);
 	let body: ts.Statement[] = [];
 	/** Use async only when needed */
-	let doUseAsync = false;
+	let callFxAwait = c.hasPromise && c.returns != null; // if add await on the controller
+	console.log('----', c.name, ':', c.returns)
+	let useAsync = callFxAwait;
 	//* Prepare params
 	let methodParams: ts.Expression[] = [];
 	for (let i = 0, len = params.length; i < len; ++i) {
@@ -704,7 +715,8 @@ function _genRouteMethod(
 			f.createIdentifier(c.name)
 		), undefined, methodParams
 	);
-	if (doUseAsync) callFx = f.createAwaitExpression(callFx);
+	// Use "await" if has post process only
+	if (callFxAwait) callFx = f.createAwaitExpression(callFx);
 	body.push(
 		f.createVariableStatement(undefined, [
 			f.createVariableDeclaration(cVar, undefined, undefined, callFx)
@@ -714,7 +726,7 @@ function _genRouteMethod(
 	body.push(f.createReturnStatement(cVar));
 	//* Create wrapper
 	methodArgs.push(f.createFunctionExpression(
-		doUseAsync ? [f.createModifier(ts.SyntaxKind.AsyncKeyword)] : undefined,
+		useAsync ? [f.createModifier(ts.SyntaxKind.AsyncKeyword)] : undefined,
 		undefined, undefined, undefined, [
 		f.createParameterDeclaration(
 			undefined, undefined, undefined, 'req', undefined,
