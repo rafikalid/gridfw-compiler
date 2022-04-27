@@ -26,7 +26,7 @@
 	"homepage": "https://github.com/rafikalid/gridfw-compiler#readme",
 	"dependencies": {
 		"chalk": "^4.1.2",
-		"ejs": "^3.1.6",
+		"ejs": "^3.1.7",
 		"pug": "^3.0.2",
 		"through2": "^4.0.2",
 		"typescript": "^4.4.3"
